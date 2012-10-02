@@ -121,14 +121,11 @@ header_parse_url(http_parser *parser, const char *at, size_t n)
 static int
 header_parse_field(http_parser *parser, const char *at, size_t n)
 {
-    char dbg_buffer[4096];
-    strncpy(dbg_buffer, at, n);
-    dbg_buffer[n] = '\0';
-    fprintf(stderr, "+++ FIELD +++\n%s\n", dbg_buffer);
     int i;
     int found;
-    header_info_t *header = (header_info_t*)parser->data;
+    header_info_t *header;
     
+    header = (header_info_t*)parser->data;
     found = 0;
     for (i = 0;
          i < sizeof(HEADER_STATE_MAP) / sizeof(header_info_state_t); ++i) {
@@ -257,7 +254,6 @@ read_request(int fd, header_info_t *header)
     parser.data = header;
 
     do {
-        memset(buffer, 0, sizeof(buffer));
         bytes_read = read(fd, buffer, sizeof(buffer));
         if (bytes_read <= 0) {
             if (bytes_read < 0) {
