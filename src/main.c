@@ -343,8 +343,8 @@ header_message_done(http_parser *parser)
         header->state = HEADER_INFO_STATE_DONE;
     }
 
-    /* reference how to search query map 
-     * query_map_t *res1 = http_query_find(header->query_map_root, "idx");
+    /* reference how to search query map */ 
+    query_map_t *res1 = http_query_find(header->query_map_root, "idx");
     query_map_t *res2 = http_query_find(header->query_map_root, "name");
     query_map_t *res3 = http_query_find(header->query_map_root, "address");
 
@@ -356,7 +356,7 @@ header_message_done(http_parser *parser)
     }
     if (res3) {
         fprintf(stderr, "res3: %s - %s\n", res3->key, res3->value);
-    }*/
+    }
 
     return 0;
 }

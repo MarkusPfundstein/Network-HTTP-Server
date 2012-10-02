@@ -81,10 +81,8 @@ http_query_destroy(query_map_t *map_root)
 int
 http_query_parse(query_map_t **map_root, const char* query, int len)
 {
-    int err, it, q_it, last, q_len;
+    int it, q_it, last;
     query_map_t *current_map;
-    query_map_t *search_map;
-    err = 0;
     it = 0;
     q_it = 0;
     last = 0;
@@ -92,21 +90,17 @@ http_query_parse(query_map_t **map_root, const char* query, int len)
     do {
         if (it == len - 1 || query[it + 1] == '&') {
             /* parse from last to it */ 
-            q_len = it - last;
-            for (q_it = last; q_it < last + q_len; q_it++) {
+            for (q_it = last; q_it < it; q_it++) {
                 if (query[q_it] == '=') {
                     /* here we have a key and a value */
                     current_map = http_query_map_alloc(query + last, q_it - last, query + q_it + 1, it - q_it);
                     if (!current_map) {
                         fprintf(stderr, "error malloc current_map\n");
-                        err = 1;
-                        goto stop;
+                        return 1;
                     }
-                    search_map = tsearch((void *)current_map, (void**)map_root, http_query_cmp_func);
-                    if (!search_map) {
+                    if (tsearch((void *)current_map, (void**)map_root, http_query_cmp_func) == NULL) {
                         perror("tsearch");
-                        err = 1;
-                        goto stop;
+                        return 1;
                     }
                 }
             }
@@ -120,8 +114,7 @@ http_query_parse(query_map_t **map_root, const char* query, int len)
         it++;
     } while (it < len);
 
-stop:
-    return err;
+    return 0;
 }
 
 query_map_t* 
