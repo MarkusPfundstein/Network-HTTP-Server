@@ -7,9 +7,10 @@
 #include <sys/socket.h>
 #include <fcntl.h>
 #include <netinet/in.h>
-#include "http_helper.h"
-#include "json_handler.h"
 #include "http_parser.h"
+#include "http_query.h"
+#include "json_handler.h"
+#include "http_query.h"
 #include "buffer.h"
 
 static int g_go_on;
@@ -59,6 +60,7 @@ typedef struct header_info_s {
     char *content_type;
     char *content_length;
     char *expect;
+    query_map_t *query_map_root;
     /* 
      * handler for content_type. for example json parser for application/json 
      * maybe i should pack this in a struct for itself
@@ -117,6 +119,7 @@ header_info_get_field(header_info_t *header, enum HEADER_INFO_STATE state, int *
     return ptr;
 }
 
+/*
 static int
 header_parse_query_cb(http_query_info_t *query_info,
                       int key_off, int key_len, 
@@ -139,13 +142,15 @@ header_parse_query_cb(http_query_info_t *query_info,
 
 
     return 0;
-}
+}*/
 
 static int
 header_parse_url(http_parser *parser, const char *at, size_t n)
 {
     header_info_t *header;
     int question_mark_offset;
+    char *query_start;
+    int query_len;
     
     header = (header_info_t*)parser->data;
     /* GET */
@@ -172,13 +177,11 @@ header_parse_url(http_parser *parser, const char *at, size_t n)
 
     question_mark_offset = strcspn(header->url, "?");
     if (question_mark_offset < n + 1) {
-        http_query_info_t query;
-        query.query = header->url + question_mark_offset + 1;
-        query.length = n - question_mark_offset - 1;
-        if (query.length > 0) {
-            fprintf(stderr, "query_LENGTH: %d\n", query.length);
-            query.data = parser;
-            if (http_parse_query(&query, &header_parse_query_cb)) {
+        query_start = header->url + question_mark_offset + 1;
+        query_len = n - question_mark_offset - 1;
+        if (query_len > 0) {
+            fprintf(stderr, "query_LENGTH: %d\n", query_len);
+            if (http_query_parse(&header->query_map_root, query_start, query_len)) {
                 fprintf(stderr, "HTTP_PARSE_QUERY ERROR\n");
                 header->state = HEADER_INFO_STATE_ERROR;
                 return 1;
@@ -441,6 +444,10 @@ child_main(int fd)
     if (header.expect) {
         fprintf(stderr, "*** free header->expect\n");
         free(header.expect);
+    }
+    if (header.query_map_root) {
+        fprintf(stderr, "*** free header->query_map\n");
+        http_query_destroy(header.query_map_root);
     }
     if (header.type_handler_free_cb) {
         fprintf(stderr, "*** call type_handler_free_cb\n");
