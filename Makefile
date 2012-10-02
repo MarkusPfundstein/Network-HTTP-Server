@@ -20,7 +20,7 @@ main.o : src/main.c
 	${GCC} ${FLAGS} -c src/main.c ${INCLUDES}
 
 all : ${OBJ}
-	${GCC} ${FLAGS} ${OBJ} -o quiiSync.out ${LIBS}
+	${GCC} ${FLAGS} ${OBJ} -o server.out ${LIBS}
 
 clean :
 	rm *.o *.out
