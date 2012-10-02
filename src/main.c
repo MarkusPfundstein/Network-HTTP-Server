@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include "http_helper.h"
 #include "json_handler.h"
 #include "http_parser.h"
 #include "buffer.h"
@@ -75,7 +76,7 @@ typedef struct header_info_s {
 static int
 json_handler_json_event(void *p, int type, const char *data, uint32_t len)
 {
-    fprintf(stderr, "PARSED JSON EVENT: %d\n", type);
+//    fprintf(stderr, "PARSED JSON EVENT: %d\n", type);
     return 0;
 }
 
@@ -117,9 +118,34 @@ header_info_get_field(header_info_t *header, enum HEADER_INFO_STATE state, int *
 }
 
 static int
+header_parse_query_cb(http_query_info_t *query_info,
+                      int key_off, int key_len, 
+                      int val_off, int val_len)
+{
+    char *key = alloca(key_len);
+    char *val = alloca(val_len);
+    int i;
+    strncpy(key, query_info->query + key_off, key_len);
+    strncpy(val, query_info->query + val_off, val_len);
+
+    for (i = 0; i < key_len; i++) {
+        putchar(key[i]);
+    }
+    putchar('\n');
+    for (i = 0; i < val_len; i++) {
+        putchar(val[i]);
+    }
+    putchar('\n');
+
+
+    return 0;
+}
+
+static int
 header_parse_url(http_parser *parser, const char *at, size_t n)
 {
     header_info_t *header;
+    int question_mark_offset;
     
     header = (header_info_t*)parser->data;
     /* GET */
@@ -143,6 +169,22 @@ header_parse_url(http_parser *parser, const char *at, size_t n)
             at,
             n);
     header->url[n] = '\0'; /*never trust a 3rd party lib*/
+
+    question_mark_offset = strcspn(header->url, "?");
+    if (question_mark_offset < n + 1) {
+        http_query_info_t query;
+        query.query = header->url + question_mark_offset + 1;
+        query.length = n - question_mark_offset - 1;
+        if (query.length > 0) {
+            fprintf(stderr, "query_LENGTH: %d\n", query.length);
+            query.data = parser;
+            if (http_parse_query(&query, &header_parse_query_cb)) {
+                fprintf(stderr, "HTTP_PARSE_QUERY ERROR\n");
+                header->state = HEADER_INFO_STATE_ERROR;
+                return 1;
+            }
+        }
+    }
               
     return 0;
 }

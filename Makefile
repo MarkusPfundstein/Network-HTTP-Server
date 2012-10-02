@@ -2,7 +2,7 @@ GCC=gcc
 FLAGS=-Wall -O2 -g
 LIBS=-lpthread -ljson
 INCLUDES=
-OBJ=json_handler.o buffer.o http_parser.o main.o
+OBJ=http_helper.o json_handler.o buffer.o http_parser.o main.o
 
 json_handler.o : src/json_handler.c
 	${GCC} ${FLAGS} -c src/json_handler.c ${INCLUDES}

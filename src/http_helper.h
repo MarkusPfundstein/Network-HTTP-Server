@@ -12,11 +12,11 @@ enum RESP_CODE_E {
 
 extern int http_response(char *buffer, enum RESP_CODE_E code, const char* type, const char *content, int n);
 
-struct http_query_info_s {
+typedef struct http_query_info_s {
   void *data;
   const char* query;
   int length;
-};
+} http_query_info_t;
 
 typedef int (*parse_query_cb)(struct http_query_info_s *, int, int, int, int);
 
