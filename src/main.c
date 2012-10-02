@@ -92,7 +92,9 @@ header_info_get_field(header_info_t *header, enum HEADER_INFO_STATE state, int *
 static int
 header_parse_url(http_parser *parser, const char *at, size_t n)
 {
-    header_info_t *header = (header_info_t*)parser->data;
+    header_info_t *header;
+    
+    header = (header_info_t*)parser->data;
     /* GET */
     if (parser->method == 1) {
         header->method = 1;
