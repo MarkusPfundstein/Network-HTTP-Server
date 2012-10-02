@@ -1,10 +1,13 @@
 GCC=gcc
 FLAGS=-Wall -O2 -g
-LIBS=-lpthread
+LIBS=-lpthread -ljansson
 INCLUDES=
-OBJ=http_parser.o main.o
+OBJ=buffer.o http_parser.o main.o
 
-http_heloer.o : src/http_helper.c
+buffer.o : src/buffer.c
+	${GCC} ${FLAGS} -c src/buffer.c ${INCLUDES}
+
+http_helper.o : src/http_helper.c
 	${GCC} ${FLAGS} -c src/http_helper.c ${INCLUDES}
 
 http_parser.o : src/http_parser.c

@@ -7,8 +7,9 @@
 #include <sys/socket.h>
 #include <fcntl.h>
 #include <netinet/in.h>
+#include <jansson.h>
 #include "http_parser.h"
-#include "http_helper.h"
+#include "buffer.h"
 
 static int g_go_on;
 static int g_sockfd;
@@ -40,9 +41,24 @@ static const header_info_state_t HEADER_STATE_MAP[] = {
     { "Expect", HEADER_INFO_STATE_EXPECT }
 };
 
+#define CONTENT_TYPE_JSON "application/json"
+
+typedef struct json_handler_s {
+    json_t *root;
+    json_error_t error;
+    /* buffer where we load the data in. current json parser
+     * can't handle chunks.. which sucks */
+    buffer_t buffer;
+} json_handler_t;
+
+typedef void (*type_handler_cb_t)(void *);
+
+typedef int (*type_handler_data_cb_t)(void *, const char*, int);
+
 typedef struct header_info_s {
     enum HEADER_INFO_STATE state; /* current state of parsing */
-    int method;
+    int method; /* GET/POST whatever */
+    /* http header fields */
     char *url;
     char *host;
     char *user_agent;
@@ -50,7 +66,74 @@ typedef struct header_info_s {
     char *content_type;
     char *content_length;
     char *expect;
+    /* 
+     * handler for content_type. for example json parser for application/json 
+     */
+    void *type_handler;
+    /* type handler gets free'd */
+    type_handler_cb_t type_handler_free_cb;
+    /* new data for type handler */
+    /* return 1 to indicate you dont want to go on with receiving data */
+    type_handler_data_cb_t type_handler_data_cb;
+    /* gets called when type handler is done */
+    type_handler_cb_t type_handler_done_cb;
 } header_info_t;
+
+static json_handler_t *
+json_handler_init(int content_size)
+{
+    json_handler_t *handler;
+
+    handler = malloc(sizeof(json_handler_t));
+    if (!handler) {
+        fprintf(stderr, "couldn't allocate memory for json_handler_t\n");
+        return NULL;
+    }
+    memset(handler, 0, sizeof(json_handler_t));
+    
+    /* buffer were we will read all our data in */
+    if (buffer_init(&handler->buffer, content_size)) {
+        fprintf(stderr, "error buffer_init, content_size: %d\n", content_size);
+        free(handler);
+        return NULL;
+    }
+
+    return handler;
+}
+
+static void
+json_handler_destroy(void *p)
+{
+    json_handler_t *handler;
+
+    if (!p) {
+        return;
+    }
+    handler = p;
+
+    buffer_destroy(&handler->buffer);
+    free(handler);
+}
+
+static int
+json_handler_new_data(void *p, const char *data, int n)
+{
+    json_handler_t *handler;
+    handler = p;
+    return buffer_append(&handler->buffer, data, n);
+}
+
+static void
+json_handler_done(void *p)
+{
+    json_handler_t *handler;
+    int i;
+    handler = p;
+    for (i = 0; i < handler->buffer.len; i++) {
+        putchar(handler->buffer.data[i]);
+    }
+    putchar('\n');
+}
 
 static char *
 header_info_get_field(header_info_t *header, enum HEADER_INFO_STATE state, int *bytes)
@@ -201,39 +284,79 @@ header_parse_value(http_parser *parser, const char *at, size_t n)
 static int
 header_parse_body(http_parser *parser, const char *a, size_t n)
 {
-    char buffer[4096];
-    strncpy(buffer, a, n);
-    buffer[n] = '\0';
-    fprintf(stderr, "%s\n", buffer);
-    return 0;
+    header_info_t *header;
+    int err;
+    err = 0;
+    header = (header_info_t*)parser->data;
+    if (header->type_handler_data_cb) {
+        err = header->type_handler_data_cb(header->type_handler,
+                                           a, 
+                                           (int)n);
+        if (err) {
+            header->state = HEADER_INFO_STATE_ERROR;
+        }
+    }
+
+    return err;
 }
 
 static int
 header_done(http_parser *parser)
 {
     header_info_t *header;
+    int content_type_len;
+    int content_length;
     header = (header_info_t*)parser->data;
     fprintf(stderr, "*** HEADER DONE ***\n");
     if (header->state == HEADER_INFO_STATE_ERROR) {
         fprintf(stderr, "*** error while parsing header... abort\n");
         return 1;
     }
+    /* here we can set our header->user data to the appropriate handler */
+    if (header->content_length) {
+        content_length = atoi(header->content_length);
+    } else {
+        content_length = 0;
+    }
+    if (content_length > 0 && header->content_type) {
+        content_type_len = strlen(header->content_type);
+        if (content_type_len >= strlen(CONTENT_TYPE_JSON) &&
+            strncmp(CONTENT_TYPE_JSON,
+                    header->content_type,
+                    content_type_len) == 0) {
+            
+            fprintf(stderr, "l: %d\n", content_length);
+            header->type_handler = json_handler_init(content_length);
+            if (!header->type_handler) {
+                header->state = HEADER_INFO_STATE_ERROR;
+                return 1;
+            } else {
+                header->type_handler_data_cb = &json_handler_new_data;
+                header->type_handler_free_cb = &json_handler_destroy;
+                header->type_handler_done_cb = &json_handler_done;
+            }
+        }
+    }
     header->state = HEADER_INFO_STATE_BODY;
     return 0;
 }
 
 static int
-message_done(http_parser *parser)
+header_message_done(http_parser *parser)
 {
     header_info_t *header;
     header = (header_info_t*)parser->data;
     fprintf(stderr, "*** MESSAGE_DONE ***\n");
+    if (header->type_handler_done_cb) {
+        header->type_handler_done_cb(header->type_handler);
+    }
     if (header->state != HEADER_INFO_STATE_ERROR) {
         header->state = HEADER_INFO_STATE_DONE;
     }
 
     return 0;
 }
+
 
 static int
 read_request(int fd, header_info_t *header)
@@ -250,7 +373,7 @@ read_request(int fd, header_info_t *header)
     parser_settings.on_url = &header_parse_url;
     parser_settings.on_header_field = &header_parse_field;
     parser_settings.on_header_value = &header_parse_value;
-    parser_settings.on_message_complete = &message_done;
+    parser_settings.on_message_complete = &header_message_done;
     parser_settings.on_headers_complete = &header_done;
     parser_settings.on_body = &header_parse_body;
 
@@ -277,6 +400,10 @@ read_request(int fd, header_info_t *header)
             break;
         }
     } while (1);
+
+    if (header->state == HEADER_INFO_STATE_ERROR) {
+        fprintf(stderr, "OOOOH NOOOOO !!!! A ERROR OCCURED\n");
+    }
 
     return 0;
 }
@@ -328,6 +455,15 @@ child_main(int fd)
     if (header.expect) {
         fprintf(stderr, "*** free header->expect\n");
         free(header.expect);
+    }
+    if (header.type_handler_free_cb) {
+        fprintf(stderr, "*** call type_handler_free_cb\n");
+        header.type_handler_free_cb(header.type_handler);
+    } else {
+        if (header.type_handler) {
+            fprintf(stderr, "*** lazy free header.type_handler\n");
+            free(header.type_handler);
+        }
     }
     close(fd);
     return 0;
