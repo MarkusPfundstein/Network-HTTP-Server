@@ -7,7 +7,7 @@
 #include <sys/socket.h>
 #include <fcntl.h>
 #include <netinet/in.h>
-#include <jansson.h>
+#include "json.h"
 #include "http_parser.h"
 #include "buffer.h"
 
@@ -44,11 +44,8 @@ static const header_info_state_t HEADER_STATE_MAP[] = {
 #define CONTENT_TYPE_JSON "application/json"
 
 typedef struct json_handler_s {
-    json_t *root;
-    json_error_t error;
-    /* buffer where we load the data in. current json parser
-     * can't handle chunks.. which sucks */
-    buffer_t buffer;
+    json_parser parser;
+
 } json_handler_t;
 
 typedef void (*type_handler_cb_t)(void *);
@@ -79,6 +76,13 @@ typedef struct header_info_s {
     type_handler_cb_t type_handler_done_cb;
 } header_info_t;
 
+static int
+json_handler_json_event(void *p, int type, const char *data, uint32_t len)
+{
+    fprintf(stderr, "PARSED JSON EVENT: %d\n", type);
+    return 0;
+}
+
 static json_handler_t *
 json_handler_init(int content_size)
 {
@@ -91,9 +95,11 @@ json_handler_init(int content_size)
     }
     memset(handler, 0, sizeof(json_handler_t));
     
-    /* buffer were we will read all our data in */
-    if (buffer_init(&handler->buffer, content_size)) {
-        fprintf(stderr, "error buffer_init, content_size: %d\n", content_size);
+    if (json_parser_init(&handler->parser, 
+                         NULL, 
+                         &json_handler_json_event,
+                         handler)) {
+        fprintf(stderr, "error json_parser_init\n");
         free(handler);
         return NULL;
     }
@@ -105,13 +111,8 @@ static void
 json_handler_destroy(void *p)
 {
     json_handler_t *handler;
-
-    if (!p) {
-        return;
-    }
     handler = p;
-
-    buffer_destroy(&handler->buffer);
+    json_parser_free(&handler->parser);
     free(handler);
 }
 
@@ -119,20 +120,13 @@ static int
 json_handler_new_data(void *p, const char *data, int n)
 {
     json_handler_t *handler;
+    int ret;
     handler = p;
-    return buffer_append(&handler->buffer, data, n);
-}
-
-static void
-json_handler_done(void *p)
-{
-    json_handler_t *handler;
-    int i;
-    handler = p;
-    for (i = 0; i < handler->buffer.len; i++) {
-        putchar(handler->buffer.data[i]);
+    ret = json_parser_string(&handler->parser, data, n, NULL);
+    if (ret) {
+        fprintf(stderr, "ERROR PARSING JSON\n");
     }
-    putchar('\n');
+    return ret;
 }
 
 static char *
@@ -333,7 +327,7 @@ header_done(http_parser *parser)
             } else {
                 header->type_handler_data_cb = &json_handler_new_data;
                 header->type_handler_free_cb = &json_handler_destroy;
-                header->type_handler_done_cb = &json_handler_done;
+                header->type_handler_done_cb = NULL;
             }
         }
     }

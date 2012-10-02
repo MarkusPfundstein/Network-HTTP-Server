@@ -1,6 +1,6 @@
 GCC=gcc
 FLAGS=-Wall -O2 -g
-LIBS=-lpthread -ljansson
+LIBS=-lpthread -ljson
 INCLUDES=
 OBJ=buffer.o http_parser.o main.o
 
