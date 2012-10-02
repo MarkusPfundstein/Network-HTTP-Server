@@ -36,31 +36,38 @@ static query_map_t*
 http_query_map_alloc(const char *key, int key_len, const char *value, int val_len)
 {
     query_map_t *map;
+    /* mandatory */
+    assert(key);
+
     map = malloc(sizeof(query_map_t));
     if (!map) {
         return NULL;
     }
     memset(map, 0, sizeof(query_map_t));
+
     /*
      * should probably use strndup here
      */
+
     map->key = malloc(key_len + 1);
     if (!map->key) {
         free(map);
         return NULL;
     }
-    map->value = malloc(val_len + 1);
-    if (!map->value) {
-        free(map);
-        free(map->key);
-        return NULL;
-    }
     strncpy(map->key, key, key_len);
-    strncpy(map->value, value, val_len);
     map->key[key_len] = '\0';
-    map->value[val_len] = '\0';
 
-    fprintf(stderr, "map: %s - %s\n", map->key, map->value);
+    /* optional */
+    if (value && val_len > 0) {
+        map->value = malloc(val_len + 1);
+        if (!map->value) {
+            free(map);
+            free(map->key);
+            return NULL;
+        }
+        strncpy(map->value, value, val_len);
+        map->value[val_len] = '\0';
+    }
 
     return map;
 }
@@ -116,3 +123,16 @@ http_query_parse(query_map_t **map_root, const char* query, int len)
 stop:
     return err;
 }
+
+query_map_t* 
+http_query_find(query_map_t *root, const char *key)
+{
+    query_map_t *predicate;
+    query_map_t **res;
+    predicate = http_query_map_alloc(key, strlen(key), NULL, 0);
+    res = tfind(predicate, (void**)&root, http_query_cmp_func);
+    http_query_map_free(predicate);
+    return res ? *res : NULL;
+}
+
+
