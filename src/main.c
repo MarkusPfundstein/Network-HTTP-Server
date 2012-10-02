@@ -211,7 +211,8 @@ header_parse_body(http_parser *parser, const char *a, size_t n)
 static int
 header_done(http_parser *parser)
 {
-    header_info_t *header = (header_info_t*)parser->data;
+    header_info_t *header;
+    header = (header_info_t*)parser->data;
     fprintf(stderr, "*** HEADER DONE ***\n");
     if (header->state == HEADER_INFO_STATE_ERROR) {
         fprintf(stderr, "*** error while parsing header... abort\n");
@@ -224,7 +225,8 @@ header_done(http_parser *parser)
 static int
 message_done(http_parser *parser)
 {
-    header_info_t *header = (header_info_t*)parser->data;
+    header_info_t *header;
+    header = (header_info_t*)parser->data;
     fprintf(stderr, "*** MESSAGE_DONE ***\n");
     if (header->state != HEADER_INFO_STATE_ERROR) {
         header->state = HEADER_INFO_STATE_DONE;
