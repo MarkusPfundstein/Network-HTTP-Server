@@ -5,9 +5,14 @@
 #include <pthread.h>
 #include <signal.h>
 #include <sys/socket.h>
+#include <sys/select.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#define __USE_GNU 1
+#include <search.h>
+#include <time.h>
 #include <libconfig.h>
 #include "module_map.h"
 #include "globals.h"
@@ -15,11 +20,26 @@
 #include "http_query.h"
 #include "http_query.h"
 #include "buffer.h"
+#include "list.h"
 
 static int g_go_on;
 static int g_sockfd;
 
+typedef struct connection_s {
+    int fd;
+    struct http_parser_settings parser_settings;
+    http_parser parser;
+    header_info_t header;
+} connection_t; 
+
+static connection_t *g_connection_root;
+
+static int g_highsock;
+
 struct config_s g_config;
+
+fd_set g_read_master;
+fd_set g_read_set;
 
 typedef struct header_info_state_s {
     char *ident;
@@ -34,6 +54,17 @@ static const header_info_state_t HEADER_STATE_MAP[] = {
     { "Content-Length", HEADER_INFO_STATE_CONTENT_LENGTH },
     { "Expect", HEADER_INFO_STATE_EXPECT }
 };
+
+static int
+make_socket_nonblock(int fd)
+{
+    int x;
+    x = fcntl(fd, F_GETFL, 0);
+    if (x < 0) {
+        return x;
+    }
+    return fcntl(fd, F_SETFL, x | O_NONBLOCK);
+}
 
 static module_t *
 get_mod_for_url(const char *url)
@@ -286,106 +317,82 @@ header_message_done(http_parser *parser)
     return 0;
 }
 
-static int
-read_request(header_info_t *header)
+static void 
+request_done(connection_t *con)
 {
-    char buffer[MAX_BUF_SIZE];
-    int bytes_read;
-    struct http_parser_settings parser_settings;
-    http_parser parser;
-
-    memset(&parser_settings, 
-           0,
-           sizeof(struct http_parser_settings));
-
-    parser_settings.on_url = &header_parse_url;
-    parser_settings.on_header_field = &header_parse_field;
-    parser_settings.on_header_value = &header_parse_value;
-    parser_settings.on_message_complete = &header_message_done;
-    parser_settings.on_headers_complete = &header_done;
-    parser_settings.on_body = &header_parse_body;
-
-    http_parser_init(&parser, HTTP_REQUEST);
-    parser.data = header;
-
-    do {
-        bytes_read = read(header->fd, buffer, g_config.read_package_size);
-        if (bytes_read <= 0) {
-            if (bytes_read < 0) {
-                perror("read_header::read()");
-            }
-            return 1;
-        }
-
-        http_parser_execute(&parser, 
-                            &parser_settings, 
-                            buffer,
-                            bytes_read);
-
-        if (header->state == HEADER_INFO_STATE_DONE ||
-            header->state == HEADER_INFO_STATE_ERROR) {
-            break;
-        }
-    } while (1);
-
-    if (header->state == HEADER_INFO_STATE_ERROR) {
-        fprintf(stderr, "OOOOH NOOOOO !!!! A ERROR OCCURED\n");
-    }
-
-    return 0;
-}
-
-static int 
-child_main(int fd)
-{
-    header_info_t header;
-    memset(&header, 0, sizeof(header_info_t));
-    header.fd = fd;
-    read_request(&header);
-
     /* interpret stuff */
-    /*
     fprintf(stderr, "\nDONE\n");
-    fprintf(stderr, "url: %s\n", header.url);
-    fprintf(stderr, "content-length: %s\n", header.content_length);
-    fprintf(stderr, "content-type: %s\n", header.content_type);
-    fprintf(stderr, "accept: %s\n", header.accept);
-    fprintf(stderr, "host: %s\n", header.host);
-    fprintf(stderr, "UA: %s\n", header.user_agent);
-    fprintf(stderr, "expect: %s\n", header.expect);
-    */
+    fprintf(stderr, "url: %s\n", con->header.url);
+    fprintf(stderr, "content-length: %s\n", con->header.content_length);
+    fprintf(stderr, "content-type: %s\n", con->header.content_type);
+    fprintf(stderr, "accept: %s\n", con->header.accept);
+    fprintf(stderr, "host: %s\n", con->header.host);
+    fprintf(stderr, "UA: %s\n", con->header.user_agent);
+    fprintf(stderr, "expect: %s\n", con->header.expect);
     /* echo back shit */
 
     /* close */
-    if (header.url) {
-        free(header.url);
+    if (con->header.url) {
+        free(con->header.url);
     }
-    if (header.base_url) {
-        free(header.base_url);
+    if (con->header.base_url) {
+        free(con->header.base_url);
     }
-    if (header.host) {
-        free(header.host);
+    if (con->header.host) {
+        free(con->header.host);
     }
-    if (header.accept) {
-        free(header.accept);
+    if (con->header.accept) {
+        free(con->header.accept);
     }
-    if (header.content_type) {
-        free(header.content_type);
+    if (con->header.content_type) {
+        free(con->header.content_type);
     }
-    if (header.user_agent) {
-        free(header.user_agent);
+    if (con->header.user_agent) {
+        free(con->header.user_agent);
     }
-    if (header.content_length) {
-        free(header.content_length);
+    if (con->header.content_length) {
+        free(con->header.content_length);
     }
-    if (header.expect) {
-        free(header.expect);
+    if (con->header.expect) {
+        free(con->header.expect);
     }
-    if (header.query_map) {
-        query_map_destroy(header.query_map);
+    if (con->header.query_map) {
+        query_map_destroy(con->header.query_map);
     }
-    
-    close(fd);
+}
+
+static int
+read_request(connection_t *con)
+{
+    char buffer[MAX_BUF_SIZE];
+    int bytes_read;
+
+    bytes_read = read(con->header.fd, buffer, g_config.read_package_size);
+    if (bytes_read <= 0) {
+        if (bytes_read < 0) {
+            if (errno == EAGAIN) {
+                fprintf(stderr, "EAGAIN\n");
+                return 0;
+            }
+            perror("read_header::read()");
+        }
+        return 1;
+    }
+
+    http_parser_execute(&con->parser, 
+                        &con->parser_settings, 
+                        buffer,
+                        bytes_read);
+
+    if (con->header.state == HEADER_INFO_STATE_DONE ||
+        con->header.state == HEADER_INFO_STATE_ERROR) {
+        return 1;
+    }
+
+    if (con->header.state == HEADER_INFO_STATE_ERROR) {
+        fprintf(stderr, "OOOOH NOOOOO !!!! A ERROR OCCURED\n");
+    }
+
     return 0;
 }
 
@@ -565,16 +572,106 @@ error:
     return err;
 }
 
+static int
+connection_cmp_func(const void *l, const void *r)
+{
+    connection_t *cl;
+    connection_t *cr;
+    cl = (connection_t*)l;
+    cr = (connection_t*)r;
+    if (cl->fd > cr->fd) {
+        return -1;
+    } else if (cl->fd < cr->fd ) {
+        return 1;
+    }
+    return 0;
+}
+
+static connection_t*
+connection_make(int fd)
+{
+    connection_t *con;
+    con = malloc(sizeof(connection_t));
+    if (!con) {
+        fprintf(stderr, "error allocating memory for connection\n");
+        return NULL;
+    }
+    memset(con, 0, sizeof(connection_t));
+    con->fd = fd;
+
+    if (tsearch((void*)con, 
+                (void**)&g_connection_root,
+                connection_cmp_func) == NULL) {
+        fprintf(stderr, "error inserting new connection in tree\n");
+        free(con);
+        return NULL;
+    }
+
+    con->parser_settings.on_url = &header_parse_url;
+    con->parser_settings.on_header_field = &header_parse_field;
+    con->parser_settings.on_header_value = &header_parse_value;
+    con->parser_settings.on_message_complete = &header_message_done;
+    con->parser_settings.on_headers_complete = &header_done;
+    con->parser_settings.on_body = &header_parse_body;
+
+    http_parser_init(&con->parser, HTTP_REQUEST);
+    con->parser.data = &con->header;
+
+    con->header.fd = fd;
+    make_socket_nonblock(fd);
+
+    FD_SET(fd, &g_read_master);
+    return con;
+}
+
+static void
+connection_delete(void *p)
+{
+    connection_t *con;
+    if (!p) {
+        return;
+    }
+    con = p;
+    fprintf(stderr, "delete connection: %d\n", con->fd);
+    if (FD_ISSET(con->fd, &g_read_master)) {
+        FD_CLR(con->fd, &g_read_master);
+    }
+    if (tdelete((void*)con, (void**)&g_connection_root, connection_cmp_func) == NULL) {
+        fprintf(stderr, "ERROR *** deleting connection from tree\n");
+    }
+    free(con);
+}
+
+static void
+connection_handle_socket_ready(const void *p, const VISIT which, const int depth)
+{
+    connection_t *con;
+    con = *(connection_t**)p;
+    if (which != 1) {
+        return;
+    }
+    fprintf(stderr, "twalk %d - %d\n", con->fd, which);
+    if (FD_ISSET(con->fd, &g_read_master)) {
+        fprintf(stderr, "read %d\n", con->fd);
+        if (read_request(con)) {
+            request_done(con);
+            close(con->fd);
+            connection_delete(con);
+        }
+    }
+}
+
 int 
 main(int argc, char **argv)
 {
-    int child_pid;
     int newfd;
+    int fd_ready;
     int ret;
-    int child_return;
     socklen_t socklen;
     struct sockaddr_in serv_addr;
     struct sockaddr_in cli_addr;
+    struct timeval timeout;
+    connection_t *new_connection;
 
     g_sockfd = -1;
 
@@ -614,27 +711,42 @@ main(int argc, char **argv)
     }
     socklen = sizeof(cli_addr);
     g_go_on = 1;
+    g_connection_root = NULL;
+    FD_ZERO(&g_read_master);
+    FD_SET(g_sockfd, &g_read_master);
+    make_socket_nonblock(g_sockfd);
     while (g_go_on) {
-        newfd = accept(g_sockfd, (struct sockaddr *)&cli_addr, &socklen);
-        if (newfd < 0) {
-            perror("accept");
-        } else {
-            child_pid = fork();
-            if (child_pid < 0) {
-                perror("fork");
-                close(newfd);
-            } else if (child_pid == 0) {
-                close(g_sockfd);
-                child_return = child_main(newfd);
-                clean_config_file();
-                module_map_destroy(g_config.module_root);
-                exit(child_return);
-            } else {
-                close(newfd);
+        timeout.tv_sec = 1;
+        timeout.tv_usec = 0;
+        g_read_set = g_read_master;
+        fd_ready = select(1024, &g_read_set, NULL, NULL, &timeout);
+        if (fd_ready < 0) {
+            perror("select");
+            g_go_on = 0;
+        } else if (fd_ready > 0) {
+            if (FD_ISSET(g_sockfd, &g_read_set)) {
+                newfd = accept(g_sockfd, (struct sockaddr *)&cli_addr, &socklen);
+                if (newfd < 0) {
+                    perror("accept");
+                } else {
+                    new_connection = connection_make(newfd);
+                    if (!new_connection) {
+                        continue;
+                    }
+                    
+                    fprintf(stderr, "new con :%d\n", new_connection->fd);
+                }
+            }
+            if (g_connection_root) {
+                twalk(g_connection_root, connection_handle_socket_ready);
             }
         }
     }
     ret = 0;
+
+    if (g_connection_root) {
+        tdestroy(g_connection_root, connection_delete);
+    }
     
 error:
     fprintf(stderr, "shutdown\n");
