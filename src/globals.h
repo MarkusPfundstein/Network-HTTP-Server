@@ -39,6 +39,11 @@ struct config_s {
      * root of modules
      */
     module_t *module_root;
+
+    /*
+     * base_path from which server shall search for files
+     */
+    char *base_path;
 };
 
 enum HEADER_INFO_STATE {
@@ -55,9 +60,21 @@ enum HEADER_INFO_STATE {
 };
 
 typedef struct header_info_s {
-    enum HEADER_INFO_STATE state; /* current state of parsing */
-    int method; /* GET/POST whatever */
-    /* http header fields */
+    /* 
+     * fd of connection 
+     */
+    int fd; 
+    /* 
+     * current state of parsing 
+     */
+    enum HEADER_INFO_STATE state;     
+    /* 
+     * GET/POST whatever 
+     */
+    int method; 
+    /*
+     * http header fields 
+     */
     char *url;
     char *base_url;
     char *host;

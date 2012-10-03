@@ -54,5 +54,6 @@ struct config_s;
 struct header_info_s;
 extern int module_call_init_func(module_t *module, struct config_s *config);
 extern int module_call_func(module_t* mod, const char *name, struct config_s *config, struct header_info_s *header);
+extern int module_call_data_func(module_t *mod, const char *name, struct config_s *config, struct header_info_s *header, const char *data, size_t len);
 
 #endif

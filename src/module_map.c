@@ -67,11 +67,25 @@ module_call_init_func(module_t *module, struct config_s *config)
 int
 module_call_func(module_t *mod, const char *name, struct config_s *c, struct header_info_s *h)
 {
+    int err;
     int (*mod_func)(struct config_s*, struct header_info_s *);
     mod_func = module_sym(mod, name);
     if (mod_func) {
-        (*mod_func)(c, h);
-        return 0;
+        err = (*mod_func)(c, h);
+        return err;
+    }
+    return 1;
+}
+
+extern int 
+module_call_data_func(module_t *mod, const char *name, struct config_s *c, struct header_info_s *h, const char *data, size_t len) 
+{
+    int err;
+    int (*mod_func)(struct config_s*, struct header_info_s *, const char*, size_t);
+    mod_func = module_sym(mod, name);
+    if (mod_func) {
+        err = (*mod_func)(c, h, data, len);
+        return err;
     }
     return 1;
 }

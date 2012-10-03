@@ -34,6 +34,28 @@ static const header_info_state_t HEADER_STATE_MAP[] = {
     { "Content-Length", HEADER_INFO_STATE_CONTENT_LENGTH },
     { "Expect", HEADER_INFO_STATE_EXPECT }
 };
+
+static module_t *
+get_mod_for_url(const char *url)
+{
+    /* should cache that */
+
+    char *file_ext;
+    module_t *mod;
+    mod = NULL;
+    if (url) {
+        file_ext = strrchr(url, '.');
+        if (file_ext) {
+            mod = module_map_find_ident(g_config.module_root, file_ext + 1);
+            if (!mod) {
+                /* check for wild card mod */
+                mod = module_map_find_ident(g_config.module_root, "*");
+            }
+        }
+    }
+    return mod;
+}
+
 static char *
 header_info_get_field(header_info_t *header, enum HEADER_INFO_STATE state, int *bytes)
 {
@@ -208,31 +230,40 @@ static int
 header_parse_body(http_parser *parser, const char *a, size_t n)
 {
     header_info_t *header;
+    module_t *mod;
     int err;
     err = 0;
     header = (header_info_t*)parser->data;
 
+    mod = get_mod_for_url(header->base_url);
+    if (mod) {
+        if (module_call_data_func(mod, "MOD_on_body", &g_config, header, a, n)) {
+            header->state = HEADER_INFO_STATE_ERROR;
+            return 1;
+        }
+    }
+
     return err;
 }
+
+
 
 static int
 header_done(http_parser *parser)
 {
     header_info_t *header;
     module_t *mod;
-    char *file_ext;
     header = (header_info_t*)parser->data;
     if (header->state == HEADER_INFO_STATE_ERROR) {
         fprintf(stderr, "*** error while parsing header... abort\n");
         return 1;
     }
     
-    file_ext = strrchr(header->base_url, '.');
-    fprintf(stderr, "file_ext: %s\n", file_ext);
-    if (file_ext) {
-        mod = module_map_find_ident(g_config.module_root, file_ext + 1);
-        if (mod) {
-            module_call_func(mod, "MOD_on_headers_done", &g_config, header);
+    mod = get_mod_for_url(header->base_url);
+    if (mod) {
+        if (module_call_func(mod, "MOD_on_headers_done", &g_config, header)) {
+            header->state = HEADER_INFO_STATE_ERROR;
+            return 1;
         }
     }
    
@@ -244,10 +275,19 @@ static int
 header_message_done(http_parser *parser)
 {
     header_info_t *header;
+    module_t *mod;
     header = (header_info_t*)parser->data;
     
     if (header->state != HEADER_INFO_STATE_ERROR) {
         header->state = HEADER_INFO_STATE_DONE;
+    }
+
+    mod = get_mod_for_url(header->base_url);
+    if (mod) {
+        if (module_call_func(mod, "MOD_on_message_done", &g_config, header)) {
+            header->state = HEADER_INFO_STATE_ERROR;
+            return 1;
+        }
     }
 
     /* reference how to search query map */ 
@@ -270,7 +310,7 @@ header_message_done(http_parser *parser)
 }
 
 static int
-read_request(int fd, header_info_t *header)
+read_request(header_info_t *header)
 {
     char buffer[MAX_BUF_SIZE];
     int bytes_read;
@@ -292,7 +332,7 @@ read_request(int fd, header_info_t *header)
     parser.data = header;
 
     do {
-        bytes_read = read(fd, buffer, g_config.read_package_size);
+        bytes_read = read(header->fd, buffer, g_config.read_package_size);
         if (bytes_read <= 0) {
             if (bytes_read < 0) {
                 perror("read_header::read()");
@@ -323,7 +363,8 @@ child_main(int fd)
 {
     header_info_t header;
     memset(&header, 0, sizeof(header_info_t));
-    read_request(fd, &header);
+    header.fd = fd;
+    read_request(&header);
 
     /* interpret stuff */
     /*
@@ -439,6 +480,14 @@ load_mods(config_t *config, config_setting_t *setting)
     return err;
 }
 
+static void
+clean_config_file()
+{
+    if (g_config.base_path) {
+        free(g_config.base_path);
+    }
+}
+
 static int
 parse_config_file(const char *path)
 {
@@ -514,6 +563,15 @@ parse_config_file(const char *path)
         }
 
         g_config.backlog = int_val;
+
+        if (!config_setting_lookup_string(setting,
+                                          "base_path",
+                                          &string_val)) {
+            fprintf(stderr, "ERROR ... no base path specified\n");
+            err = 1;
+            goto error;
+        }
+        g_config.base_path = strdup(string_val);
     }
     
 
@@ -521,6 +579,7 @@ parse_config_file(const char *path)
     fprintf(stderr, "accept_ip: %s\n", g_config.accept_ip_v4);
     fprintf(stderr, "read_package_size: %d\n", g_config.read_package_size);
     fprintf(stderr, "backlog: %d\n", g_config.backlog);
+    fprintf(stderr, "base_path: %s\n", g_config.base_path);
 
     err = load_mods(&config, setting);
 
@@ -590,6 +649,7 @@ main(int argc, char **argv)
             } else if (child_pid == 0) {
                 close(g_sockfd);
                 child_return = child_main(newfd);
+                clean_config_file();
                 module_map_destroy(g_config.module_root);
                 exit(child_return);
             } else {
@@ -603,6 +663,7 @@ error:
     fprintf(stderr, "shutdown\n");
 
     module_map_destroy(g_config.module_root);
+    clean_config_file();
     if (g_sockfd != -1) {
         close(g_sockfd);
     }
