@@ -472,8 +472,8 @@ parse_config_file(const char *path)
     const char *string_val;
     int string_val_len;
     config_t config;
-    memset(&g_config, 0, sizeof(struct config_s));
     config_setting_t *setting;
+    memset(&g_config, 0, sizeof(struct config_s));
     err = 0;
     config_init(&config);
     fprintf(stderr, "read config: %s\n", path);
@@ -520,23 +520,32 @@ parse_config_file(const char *path)
         if (!config_setting_lookup_int(setting,
                                        "read_package_size",
                                        &int_val)) {
-            int_val = 4096;            
+            int_val = MAX_BUF_SIZE;            
         }
-        if (int_val > 4096) {
+        if (int_val > MAX_BUF_SIZE) {
             fprintf(stderr, "WARNING ... read_package_size given bigger than MAX_BUF_SIZE (%d)\n", MAX_BUF_SIZE);
-            int_val = 4096;
+            int_val = MAX_BUF_SIZE;
         } else if (int_val < 100) {
             fprintf(stderr, "WARNING ... read_package_size to small.\n");
             int_val = 100;
         }
         
         g_config.read_package_size = int_val;
+
+        if (!config_setting_lookup_int(setting,
+                                       "backlog",
+                                       &int_val)) {
+            int_val = 128;
+        }
+
+        g_config.backlog = int_val;
     }
     
 
     fprintf(stderr, "listen_port: %d\n", g_config.listen_port); 
     fprintf(stderr, "accept_ip: %s\n", g_config.accept_ip_v4);
     fprintf(stderr, "read_package_size: %d\n", g_config.read_package_size);
+    fprintf(stderr, "backlog: %d\n", g_config.backlog);
 
 error:
     config_destroy(&config);
@@ -577,9 +586,12 @@ main(int argc, char **argv)
         return 1;
     }
 
-    listen(g_sockfd, 5);
-    socklen = sizeof(cli_addr);
     g_go_on = 1;
+    if (listen(g_sockfd, g_config.backlog) < 0) {
+        perror("listen");
+        g_go_on = 0;
+    }
+    socklen = sizeof(cli_addr);
     while (g_go_on) {
         newfd = accept(g_sockfd, (struct sockaddr *)&cli_addr, &socklen);
         if (newfd < 0) {
