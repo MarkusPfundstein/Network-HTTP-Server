@@ -1,10 +1,10 @@
 GCC=gcc
 FLAGS=-Wall -O2 -g
-LIBS=-lpthread -ljson -lconfig -ldl
+LIBS=-lpthread -lconfig -ldl
 INCLUDES=
 MOD_INCLUDES=-I/${PWD}/src/
 #main server objects to be build
-OBJ=module_map.o http_query.o json_handler.o buffer.o http_parser.o main.o
+OBJ=module_map.o http_query.o buffer.o http_parser.o main.o
 
 MODS=mod_html.so
 #library path to mods
@@ -19,9 +19,6 @@ mod_html.so : ${LD_LIBRARY_PATH}/mod_html/mod_html.c
 
 module_map.o : src/module_map.c
 	${GCC} ${FLAGS} -c src/module_map.c ${INCLUDES}
-
-json_handler.o : src/json_handler.c
-	${GCC} ${FLAGS} -c src/json_handler.c ${INCLUDES}
 
 buffer.o : src/buffer.c
 	${GCC} ${FLAGS} -c src/buffer.c ${INCLUDES}
