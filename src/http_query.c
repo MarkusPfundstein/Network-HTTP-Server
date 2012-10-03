@@ -73,13 +73,24 @@ http_query_map_alloc(const char *key, int key_len, const char *value, int val_le
 }
 
 void
-http_query_destroy(query_map_t *map_root)
+query_map_destroy(query_map_t *map_root)
 {
     tdestroy(map_root, http_query_map_free);
 }
 
+query_map_t* 
+query_map_find(query_map_t *root, const char *key)
+{
+    query_map_t *predicate;
+    query_map_t **res;
+    predicate = http_query_map_alloc(key, strlen(key), NULL, 0);
+    res = tfind(predicate, (void**)&root, http_query_cmp_func);
+    http_query_map_free(predicate);
+    return res ? *res : NULL;
+}
+
 int
-http_query_parse(query_map_t **map_root, const char* query, int len)
+query_map_init(query_map_t **map_root, const char* query, int len)
 {
     int it, q_it, last;
     query_map_t *current_map;
@@ -117,15 +128,5 @@ http_query_parse(query_map_t **map_root, const char* query, int len)
     return 0;
 }
 
-query_map_t* 
-http_query_find(query_map_t *root, const char *key)
-{
-    query_map_t *predicate;
-    query_map_t **res;
-    predicate = http_query_map_alloc(key, strlen(key), NULL, 0);
-    res = tfind(predicate, (void**)&root, http_query_cmp_func);
-    http_query_map_free(predicate);
-    return res ? *res : NULL;
-}
 
 

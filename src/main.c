@@ -119,31 +119,6 @@ header_info_get_field(header_info_t *header, enum HEADER_INFO_STATE state, int *
     return ptr;
 }
 
-/*
-static int
-header_parse_query_cb(http_query_info_t *query_info,
-                      int key_off, int key_len, 
-                      int val_off, int val_len)
-{
-    char *key = alloca(key_len);
-    char *val = alloca(val_len);
-    int i;
-    strncpy(key, query_info->query + key_off, key_len);
-    strncpy(val, query_info->query + val_off, val_len);
-
-    for (i = 0; i < key_len; i++) {
-        putchar(key[i]);
-    }
-    putchar('\n');
-    for (i = 0; i < val_len; i++) {
-        putchar(val[i]);
-    }
-    putchar('\n');
-
-
-    return 0;
-}*/
-
 static int
 header_parse_url(http_parser *parser, const char *at, size_t n)
 {
@@ -181,7 +156,7 @@ header_parse_url(http_parser *parser, const char *at, size_t n)
         query_len = n - question_mark_offset - 1;
         if (query_len > 0) {
             fprintf(stderr, "query_LENGTH: %d\n", query_len);
-            if (http_query_parse(&header->query_map_root, query_start, query_len)) {
+            if (query_map_init(&header->query_map_root, query_start, query_len)) {
                 fprintf(stderr, "HTTP_PARSE_QUERY ERROR\n");
                 header->state = HEADER_INFO_STATE_ERROR;
                 return 1;
@@ -344,9 +319,9 @@ header_message_done(http_parser *parser)
     }
 
     /* reference how to search query map */ 
-    query_map_t *res1 = http_query_find(header->query_map_root, "idx");
-    query_map_t *res2 = http_query_find(header->query_map_root, "name");
-    query_map_t *res3 = http_query_find(header->query_map_root, "address");
+    query_map_t *res1 = query_map_find(header->query_map_root, "idx");
+    query_map_t *res2 = query_map_find(header->query_map_root, "name");
+    query_map_t *res3 = query_map_find(header->query_map_root, "address");
 
     if (res1) {
         fprintf(stderr, "res1: %s - %s\n", res1->key, res1->value);
@@ -462,7 +437,7 @@ child_main(int fd)
     }
     if (header.query_map_root) {
         fprintf(stderr, "*** free header->query_map\n");
-        http_query_destroy(header.query_map_root);
+        query_map_destroy(header.query_map_root);
     }
     if (header.type_handler_free_cb) {
         fprintf(stderr, "*** call type_handler_free_cb\n");
