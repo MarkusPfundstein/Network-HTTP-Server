@@ -87,6 +87,10 @@ typedef struct header_info_s {
      * root of query map
      */
     query_map_t *query_map;
+    /*
+     * module used for file extension of request
+     */
+    module_t *mod;
 } header_info_t;
 
 /* 

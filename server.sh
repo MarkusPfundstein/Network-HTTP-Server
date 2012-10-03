@@ -12,4 +12,4 @@ then
     VALGRIND="valgrind --suppressions=${SUPP_FILE} --leak-check=full --show-reachable=yes --gen-suppressions=${SUPPS}"
 fi
 
-${VALGRIND} ./server.out
+${VALGRIND} ./bone.out

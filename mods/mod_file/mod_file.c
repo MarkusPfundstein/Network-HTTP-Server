@@ -53,7 +53,6 @@ send_file_to_socket(const char *file, int fd)
     size_t file_size;
     const char *end_of_msg = "\r\n";
     const char *file_not_found = "<html><head><title>ERROR 404</title><body><p>I ain't got this file dude</p></body><html>";
-    fprintf(stderr, "SEND: %s\n", file);
     err = 0;
     fp = fopen(file, "r");
     if (fp) {

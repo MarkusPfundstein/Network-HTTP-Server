@@ -1,5 +1,6 @@
 GCC=gcc
-FLAGS=-Wall -O2 -g
+DEBUG=
+FLAGS=-Wall -O2 ${DEBUG}
 LIBS=-lpthread -lconfig -ldl
 INCLUDES=
 MOD_INCLUDES=-I/${PWD}/src/

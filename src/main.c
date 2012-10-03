@@ -227,41 +227,18 @@ header_parse_value(http_parser *parser, const char *at, size_t n)
 }
 
 static int
-header_parse_body(http_parser *parser, const char *a, size_t n)
-{
-    header_info_t *header;
-    module_t *mod;
-    int err;
-    err = 0;
-    header = (header_info_t*)parser->data;
-
-    mod = get_mod_for_url(header->base_url);
-    if (mod) {
-        if (module_call_data_func(mod, "MOD_on_body", &g_config, header, a, n)) {
-            header->state = HEADER_INFO_STATE_ERROR;
-            return 1;
-        }
-    }
-
-    return err;
-}
-
-
-
-static int
 header_done(http_parser *parser)
 {
     header_info_t *header;
-    module_t *mod;
     header = (header_info_t*)parser->data;
     if (header->state == HEADER_INFO_STATE_ERROR) {
         fprintf(stderr, "*** error while parsing header... abort\n");
         return 1;
     }
     
-    mod = get_mod_for_url(header->base_url);
-    if (mod) {
-        if (module_call_func(mod, "MOD_on_headers_done", &g_config, header)) {
+    header->mod = get_mod_for_url(header->base_url);
+    if (header->mod) {
+        if (module_call_func(header->mod, "MOD_on_headers_done", &g_config, header)) {
             header->state = HEADER_INFO_STATE_ERROR;
             return 1;
         }
@@ -272,39 +249,39 @@ header_done(http_parser *parser)
 }
 
 static int
+header_parse_body(http_parser *parser, const char *a, size_t n)
+{
+    header_info_t *header;
+    int err;
+    err = 0;
+    header = (header_info_t*)parser->data;
+
+    if (header->mod) {
+        if (module_call_data_func(header->mod, "MOD_on_body", &g_config, header, a, n)) {
+            header->state = HEADER_INFO_STATE_ERROR;
+            return 1;
+        }
+    }
+
+    return err;
+}
+
+static int
 header_message_done(http_parser *parser)
 {
     header_info_t *header;
-    module_t *mod;
     header = (header_info_t*)parser->data;
     
     if (header->state != HEADER_INFO_STATE_ERROR) {
         header->state = HEADER_INFO_STATE_DONE;
     }
 
-    mod = get_mod_for_url(header->base_url);
-    if (mod) {
-        if (module_call_func(mod, "MOD_on_message_done", &g_config, header)) {
+    if (header->mod) {
+        if (module_call_func(header->mod, "MOD_on_message_done", &g_config, header)) {
             header->state = HEADER_INFO_STATE_ERROR;
             return 1;
         }
     }
-
-    /* reference how to search query map */ 
-    /*
-    query_map_t *res1 = query_map_find(header->query_map, "idx");
-    query_map_t *res2 = query_map_find(header->query_map, "name");
-    query_map_t *res3 = query_map_find(header->query_map, "address");
-
-    if (res1) {
-        fprintf(stderr, "res1: %s - %s\n", res1->key, res1->value);
-    }
-    if (res2) {
-        fprintf(stderr, "res2: %s - %s\n", res2->key, res2->value);
-    }
-    if (res3) {
-        fprintf(stderr, "res3: %s - %s\n", res3->key, res3->value);
-    }*/
 
     return 0;
 }
