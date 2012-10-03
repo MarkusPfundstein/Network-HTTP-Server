@@ -6,7 +6,10 @@
 #include <signal.h>
 #include <sys/socket.h>
 #include <fcntl.h>
+#include <arpa/inet.h>
 #include <netinet/in.h>
+#include <libconfig.h>
+#include "globals.h"
 #include "http_parser.h"
 #include "http_query.h"
 #include "json_handler.h"
@@ -15,6 +18,8 @@
 
 static int g_go_on;
 static int g_sockfd;
+
+struct config_s g_config;
 
 enum HEADER_INFO_STATE {
     HEADER_INFO_STATE_IGNORE_FIELD = -2,
@@ -336,11 +341,10 @@ header_message_done(http_parser *parser)
     return 0;
 }
 
-
 static int
 read_request(int fd, header_info_t *header)
 {
-    char buffer[4096];
+    char buffer[MAX_BUF_SIZE];
     int bytes_read;
     struct http_parser_settings parser_settings;
     http_parser parser;
@@ -360,7 +364,7 @@ read_request(int fd, header_info_t *header)
     parser.data = header;
 
     do {
-        bytes_read = read(fd, buffer, sizeof(buffer));
+        bytes_read = read(fd, buffer, g_config.read_package_size);
         if (bytes_read <= 0) {
             if (bytes_read < 0) {
                 perror("read_header::read()");
@@ -460,19 +464,96 @@ handle_sigint(int sig)
     close(g_sockfd);
 }
 
+static int
+parse_config_file(const char *path)
+{
+    int err;
+    long int int_val; 
+    const char *string_val;
+    int string_val_len;
+    config_t config;
+    memset(&g_config, 0, sizeof(struct config_s));
+    config_setting_t *setting;
+    err = 0;
+    config_init(&config);
+    fprintf(stderr, "read config: %s\n", path);
+    if (config_read_file(&config,
+                         path) == CONFIG_FALSE) {
+        fprintf(stderr, "config_read_file(): %s - %d - %s\n", path, config_error_line(&config), config_error_text(&config));
+        err = 1;
+        goto error;
+    }
+
+    setting = config_lookup(&config, "server");
+    if (setting != NULL) {
+        if (!config_setting_lookup_int(setting, 
+                                       "listen_port", 
+                                       &int_val)) {
+            fprintf(stderr, "ERROR ... no listen port in config file %s\n",
+                    path);
+            err = 1;
+            goto error;
+        }
+        if (int_val > 65535) {
+            fprintf(stderr, "ERROR ... port has to be smaller 65535\n");
+            err = 1;
+            goto error;
+        }
+        g_config.listen_port = (int)int_val;
+        if (!config_setting_lookup_string(setting,
+                                          "accept_ip",
+                                          &string_val)) {
+            fprintf(stderr, "ERROR ... no accept_ip in config file %s\n",
+                    path);
+            err = 1;
+            goto error;
+        }
+        string_val_len = strlen(string_val);
+        /* check if supplied argument is max of 16 */
+        if (string_val_len > IP_V4_LEN - 1) {
+            fprintf(stderr, "ERROR ... accept_ip too long\n");
+            err = 1;
+            goto error;
+        }
+        memset(g_config.accept_ip_v4, 0, IP_V4_LEN);
+        memcpy(g_config.accept_ip_v4, string_val, string_val_len);
+        if (!config_setting_lookup_int(setting,
+                                       "read_package_size",
+                                       &int_val)) {
+            int_val = 4096;            
+        }
+        if (int_val > 4096) {
+            fprintf(stderr, "WARNING ... read_package_size given bigger than MAX_BUF_SIZE (%d)\n", MAX_BUF_SIZE);
+            int_val = 4096;
+        } else if (int_val < 100) {
+            fprintf(stderr, "WARNING ... read_package_size to small.\n");
+            int_val = 100;
+        }
+        
+        g_config.read_package_size = int_val;
+    }
+    
+
+    fprintf(stderr, "listen_port: %d\n", g_config.listen_port); 
+    fprintf(stderr, "accept_ip: %s\n", g_config.accept_ip_v4);
+    fprintf(stderr, "read_package_size: %d\n", g_config.read_package_size);
+
+error:
+    config_destroy(&config);
+    return err;
+}
+
 int 
 main(int argc, char **argv)
 {
     int child_pid;
     int newfd;
-    int portno;
     socklen_t socklen;
     struct sockaddr_in serv_addr;
     struct sockaddr_in cli_addr;
 
-    if (argc < 2) {
-        fprintf(stderr, "arg 1 has to be port\n");
-        return 0;
+    if (parse_config_file("bone_http_serv.conf")) {
+        return 1;
     }
 
     signal(SIGCHLD, SIG_IGN);
@@ -484,10 +565,13 @@ main(int argc, char **argv)
         return 1;
     }
     memset(&serv_addr, 0, sizeof(serv_addr));
-    portno = atoi(argv[1]);
     serv_addr.sin_family = AF_INET;
-    serv_addr.sin_addr.s_addr = INADDR_ANY;
-    serv_addr.sin_port = htons(portno);
+    if (inet_aton(g_config.accept_ip_v4, &serv_addr.sin_addr) == 0) {
+        perror("inet_aton");
+        return 1;
+    }
+    fprintf(stderr, "ip %s\n", inet_ntoa(serv_addr.sin_addr));
+    serv_addr.sin_port = htons(g_config.listen_port);
     if (bind(g_sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
         perror("bind");
         return 1;

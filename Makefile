@@ -1,6 +1,6 @@
 GCC=gcc
 FLAGS=-Wall -O2 -g
-LIBS=-lpthread -ljson
+LIBS=-lpthread -ljson -lconfig
 INCLUDES=
 OBJ=http_query.o json_handler.o buffer.o http_parser.o main.o
 
