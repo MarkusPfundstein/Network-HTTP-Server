@@ -39,6 +39,43 @@ module_map_ident_cmp_func(const void *l, const void *r)
 }
 
 
+void*
+module_sym(module_t *module, const char *sym) 
+{
+    const char *err;
+    void *addr;
+    dlerror();
+    addr = dlsym(module->handle, sym);
+    if ((err = dlerror())) {
+        fprintf(stderr, "%s - %s\n", module->name, err);;
+    }
+    return addr;
+}
+
+int
+module_call_init_func(module_t *module, struct config_s *config)
+{
+    int (*mod_init)(struct config_s*);
+    mod_init = module_sym(module, "MOD_on_init");
+    if (mod_init) {
+        (*mod_init)(config);
+        return 0;
+    }
+    return 1;
+}
+
+int
+module_call_func(module_t *mod, const char *name, struct config_s *c, struct header_info_s *h)
+{
+    int (*mod_func)(struct config_s*, struct header_info_s *);
+    mod_func = module_sym(mod, name);
+    if (mod_func) {
+        (*mod_func)(c, h);
+        return 0;
+    }
+    return 1;
+}
+
 module_t*
 module_open(const char *name, const char *ident, const char *so, int flag)
 {

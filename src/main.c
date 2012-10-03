@@ -13,7 +13,6 @@
 #include "globals.h"
 #include "http_parser.h"
 #include "http_query.h"
-#include "json_handler.h"
 #include "http_query.h"
 #include "buffer.h"
 
@@ -21,19 +20,6 @@ static int g_go_on;
 static int g_sockfd;
 
 struct config_s g_config;
-
-enum HEADER_INFO_STATE {
-    HEADER_INFO_STATE_IGNORE_FIELD = -2,
-    HEADER_INFO_STATE_ERROR = -1,
-    HEADER_INFO_STATE_DONE = 0,
-    HEADER_INFO_STATE_HOST = 1,
-    HEADER_INFO_STATE_USER_AGENT = 2,
-    HEADER_INFO_STATE_ACCEPT = 3,
-    HEADER_INFO_STATE_CONTENT_TYPE = 4,
-    HEADER_INFO_STATE_CONTENT_LENGTH = 5,
-    HEADER_INFO_STATE_EXPECT = 6,
-    HEADER_INFO_STATE_BODY = 77
-};
 
 typedef struct header_info_state_s {
     char *ident;
@@ -48,49 +34,6 @@ static const header_info_state_t HEADER_STATE_MAP[] = {
     { "Content-Length", HEADER_INFO_STATE_CONTENT_LENGTH },
     { "Expect", HEADER_INFO_STATE_EXPECT }
 };
-
-#define CONTENT_TYPE_JSON "application/json"
-
-typedef void (*type_handler_cb_t)(void *);
-
-typedef int (*type_handler_data_cb_t)(void *, const char*, int);
-
-typedef struct header_info_s {
-    enum HEADER_INFO_STATE state; /* current state of parsing */
-    int method; /* GET/POST whatever */
-    /* http header fields */
-    char *url;
-    char *host;
-    char *user_agent;
-    char *accept;
-    char *content_type;
-    char *content_length;
-    char *expect;
-    /*
-     * root of query map
-     */
-    query_map_t *query_map;
-    /* 
-     * handler for content_type. for example json parser for application/json 
-     * maybe i should pack this in a struct for itself
-     */
-    void *type_handler;
-    /* type handler gets free'd */
-    type_handler_cb_t type_handler_free_cb;
-    /* new data for type handler */
-    /* return 1 to indicate you dont want to go on with receiving data */
-    type_handler_data_cb_t type_handler_data_cb;
-    /* gets called when type handler is done */
-    type_handler_cb_t type_handler_done_cb;
-} header_info_t;
-
-static int
-json_handler_json_event(void *p, int type, const char *data, uint32_t len)
-{
-//    fprintf(stderr, "PARSED JSON EVENT: %d\n", type);
-    return 0;
-}
-
 static char *
 header_info_get_field(header_info_t *header, enum HEADER_INFO_STATE state, int *bytes)
 {
@@ -160,11 +103,18 @@ header_parse_url(http_parser *parser, const char *at, size_t n)
     header->url[n] = '\0'; /*never trust a 3rd party lib*/
 
     question_mark_offset = strcspn(header->url, "?");
+    header->base_url = malloc(question_mark_offset + 1);
+    if (!header->base_url) {
+        fprintf(stderr, "header->base_url malloc failed\n");
+        header->state = HEADER_INFO_STATE_ERROR;
+        return 1;
+    }
+    strncpy(header->base_url, header->url, question_mark_offset);
+    header->base_url[question_mark_offset] = '\0';
     if (question_mark_offset < n + 1) {
         query_start = header->url + question_mark_offset + 1;
         query_len = n - question_mark_offset - 1;
         if (query_len > 0) {
-            fprintf(stderr, "query_LENGTH: %d\n", query_len);
             if (query_map_init(&header->query_map, query_start, query_len)) {
                 fprintf(stderr, "HTTP_PARSE_QUERY ERROR\n");
                 header->state = HEADER_INFO_STATE_ERROR;
@@ -261,14 +211,6 @@ header_parse_body(http_parser *parser, const char *a, size_t n)
     int err;
     err = 0;
     header = (header_info_t*)parser->data;
-    if (header->type_handler_data_cb) {
-        err = header->type_handler_data_cb(header->type_handler,
-                                           a, 
-                                           (int)n);
-        if (err) {
-            header->state = HEADER_INFO_STATE_ERROR;
-        }
-    }
 
     return err;
 }
@@ -277,48 +219,23 @@ static int
 header_done(http_parser *parser)
 {
     header_info_t *header;
-    int content_type_len;
-    int content_length;
+    module_t *mod;
+    char *file_ext;
     header = (header_info_t*)parser->data;
-    fprintf(stderr, "*** HEADER DONE ***\n");
     if (header->state == HEADER_INFO_STATE_ERROR) {
         fprintf(stderr, "*** error while parsing header... abort\n");
         return 1;
     }
-    module_t *mod = module_map_find_name(g_config.module_root, "mod_html");
-    if (mod) {
-        fprintf(stderr, "FOUND by name %s\n", mod->name);
-    }
-    mod = module_map_find_ident(g_config.module_root, "html");
-    if (mod) {
-        fprintf(stderr, "FOUND by ident %s\n", mod->name);
-    }
-   
-    /* here we can set our header->user data to the appropriate handler */
-    if (header->content_length) {
-        content_length = atoi(header->content_length);
-    } else {
-        content_length = 0;
-    }
-    if (content_length > 0 && header->content_type) {
-        content_type_len = strlen(header->content_type);
-        if (content_type_len >= strlen(CONTENT_TYPE_JSON) &&
-            strncmp(CONTENT_TYPE_JSON,
-                    header->content_type,
-                    content_type_len) == 0) {
-            
-            fprintf(stderr, "l: %d\n", content_length);
-            header->type_handler = json_handler_init(content_length, &json_handler_json_event);
-            if (!header->type_handler) {
-                header->state = HEADER_INFO_STATE_ERROR;
-                return 1;
-            } else {
-                header->type_handler_data_cb = &json_handler_new_data;
-                header->type_handler_free_cb = &json_handler_destroy;
-                header->type_handler_done_cb = NULL;
-            }
+    
+    file_ext = strrchr(header->base_url, '.');
+    fprintf(stderr, "file_ext: %s\n", file_ext);
+    if (file_ext) {
+        mod = module_map_find_ident(g_config.module_root, file_ext + 1);
+        if (mod) {
+            module_call_func(mod, "MOD_on_headers_done", &g_config, header);
         }
     }
+   
     header->state = HEADER_INFO_STATE_BODY;
     return 0;
 }
@@ -328,15 +245,13 @@ header_message_done(http_parser *parser)
 {
     header_info_t *header;
     header = (header_info_t*)parser->data;
-    fprintf(stderr, "*** MESSAGE_DONE ***\n");
-    if (header->type_handler_done_cb) {
-        header->type_handler_done_cb(header->type_handler);
-    }
+    
     if (header->state != HEADER_INFO_STATE_ERROR) {
         header->state = HEADER_INFO_STATE_DONE;
     }
 
     /* reference how to search query map */ 
+    /*
     query_map_t *res1 = query_map_find(header->query_map, "idx");
     query_map_t *res2 = query_map_find(header->query_map, "name");
     query_map_t *res3 = query_map_find(header->query_map, "address");
@@ -349,7 +264,7 @@ header_message_done(http_parser *parser)
     }
     if (res3) {
         fprintf(stderr, "res3: %s - %s\n", res3->key, res3->value);
-    }
+    }*/
 
     return 0;
 }
@@ -392,7 +307,6 @@ read_request(int fd, header_info_t *header)
 
         if (header->state == HEADER_INFO_STATE_DONE ||
             header->state == HEADER_INFO_STATE_ERROR) {
-            fprintf(stderr, "WE ARE DONE... BREAK\n");
             break;
         }
     } while (1);
@@ -412,6 +326,7 @@ child_main(int fd)
     read_request(fd, &header);
 
     /* interpret stuff */
+    /*
     fprintf(stderr, "\nDONE\n");
     fprintf(stderr, "url: %s\n", header.url);
     fprintf(stderr, "content-length: %s\n", header.content_length);
@@ -420,51 +335,38 @@ child_main(int fd)
     fprintf(stderr, "host: %s\n", header.host);
     fprintf(stderr, "UA: %s\n", header.user_agent);
     fprintf(stderr, "expect: %s\n", header.expect);
-
+    */
     /* echo back shit */
 
     /* close */
     if (header.url) {
-        fprintf(stderr, "*** free header->url\n");
         free(header.url);
     }
+    if (header.base_url) {
+        free(header.base_url);
+    }
     if (header.host) {
-        fprintf(stderr, "*** free header->host\n");
         free(header.host);
     }
     if (header.accept) {
-        fprintf(stderr, "*** free header->accept\n");
         free(header.accept);
     }
     if (header.content_type) {
-        fprintf(stderr, "*** free header->content_type\n");
         free(header.content_type);
     }
     if (header.user_agent) {
-        fprintf(stderr, "*** free header->user_agent\n");
         free(header.user_agent);
     }
     if (header.content_length) {
-        fprintf(stderr, "*** free header->content_length\n");
         free(header.content_length);
     }
     if (header.expect) {
-        fprintf(stderr, "*** free header->expect\n");
         free(header.expect);
     }
     if (header.query_map) {
-        fprintf(stderr, "*** free header->query_map\n");
         query_map_destroy(header.query_map);
     }
-    if (header.type_handler_free_cb) {
-        fprintf(stderr, "*** call type_handler_free_cb\n");
-        header.type_handler_free_cb(header.type_handler);
-    } else {
-        if (header.type_handler) {
-            fprintf(stderr, "*** lazy free header.type_handler\n");
-            free(header.type_handler);
-        }
-    }
+    
     close(fd);
     return 0;
 }
@@ -514,7 +416,7 @@ load_mods(config_t *config, config_setting_t *setting)
                 module_t *mod = module_open(mod_name,
                                             mod_ident,
                                             mod_so,
-                                            RTLD_LAZY);
+                                            RTLD_NOW);
                 if (!mod) {
                     err = 1;
                     break;
@@ -524,7 +426,12 @@ load_mods(config_t *config, config_setting_t *setting)
                     module_close(mod);
                     break;
                 }
-                /*module_close(mod);*/
+                if (module_call_init_func(mod, &g_config)) {
+                    fprintf(stderr, "ERROR %s returned not 0\n", mod->name);
+                    err = 1;
+                    module_close(mod);
+                    break;
+                }
             }
         }
     }

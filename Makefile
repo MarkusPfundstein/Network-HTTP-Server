@@ -6,18 +6,14 @@ MOD_INCLUDES=-I/${PWD}/src/
 #main server objects to be build
 OBJ=module_map.o http_query.o json_handler.o buffer.o http_parser.o main.o
 
-MODS=mod_html
+MODS=mod_html.so
 #library path to mods
-export LD_LIBRARY_PATH=${PWD}/mods
+LD_LIBRARY_PATH=${PWD}/mods
 
 MOD_HTML=${LD_LIBRARY_PATH}/mod_html.so
 
-# build mods
-${LD_LIBRARY_PATH}/mod_html.so : ${LD_LIBRARY_PATH}/mod_html/mod_html.c
-	${GCC} ${FLAGS} -fpic -c ${LD_LIBRARY_PATH}/mod_html/mod_html.c ${MOD_INCLUDES}
-
-mod_html : ${MOD_HTML} 
-	${GCC} ${FLAGS} -shared -lc -o ${MOD_HTML}
+mod_html.so : ${LD_LIBRARY_PATH}/mod_html/mod_html.c
+	${GCC} ${FLAGS} -fPIC -shared ${LD_LIBRARY_PATH}/mod_html/mod_html.c -o ${MOD_HTML} ${MOD_INCLUDES}
 
 # build main server
 

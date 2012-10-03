@@ -2,6 +2,7 @@
 #define __GLOBALS_H__
 
 #include "module_map.h"
+#include "http_query.h"
 
 /*
  * saves all necessary variables from
@@ -39,6 +40,37 @@ struct config_s {
      */
     module_t *module_root;
 };
+
+enum HEADER_INFO_STATE {
+    HEADER_INFO_STATE_IGNORE_FIELD = -2,
+    HEADER_INFO_STATE_ERROR = -1,
+    HEADER_INFO_STATE_DONE = 0,
+    HEADER_INFO_STATE_HOST = 1,
+    HEADER_INFO_STATE_USER_AGENT = 2,
+    HEADER_INFO_STATE_ACCEPT = 3,
+    HEADER_INFO_STATE_CONTENT_TYPE = 4,
+    HEADER_INFO_STATE_CONTENT_LENGTH = 5,
+    HEADER_INFO_STATE_EXPECT = 6,
+    HEADER_INFO_STATE_BODY = 77
+};
+
+typedef struct header_info_s {
+    enum HEADER_INFO_STATE state; /* current state of parsing */
+    int method; /* GET/POST whatever */
+    /* http header fields */
+    char *url;
+    char *base_url;
+    char *host;
+    char *user_agent;
+    char *accept;
+    char *content_type;
+    char *content_length;
+    char *expect;
+    /*
+     * root of query map
+     */
+    query_map_t *query_map;
+} header_info_t;
 
 /* 
  * defined and filled in main.c
