@@ -1,6 +1,8 @@
 #ifndef __GLOBALS_H__
 #define __GLOBALS_H__
 
+#include "module_map.h"
+
 /*
  * saves all necessary variables from
  * config file
@@ -31,6 +33,11 @@ struct config_s {
      * default: 128
      */
     int backlog;
+
+    /*
+     * root of modules
+     */
+    module_t *module_root;
 };
 
 /* 

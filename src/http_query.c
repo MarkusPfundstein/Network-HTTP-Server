@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <assert.h>
+/* tdestroy */
 #define __USE_GNU 1
 #include <search.h>
 #include "http_query.h"
@@ -10,8 +11,10 @@
 static int
 http_query_cmp_func(const void *l, const void *r)
 {
-    const query_map_t *ml = (query_map_t*)l;
-    const query_map_t *mr = (query_map_t*)r;
+    const query_map_t *ml; 
+    const query_map_t *mr; 
+    ml = (query_map_t*)l;
+    mr = (query_map_t*)r;
     return strcmp(ml->key, mr->key);
 }
 
@@ -110,7 +113,7 @@ query_map_init(query_map_t **map_root, const char* query, int len)
                         return 1;
                     }
                     if (tsearch((void *)current_map, (void**)map_root, http_query_cmp_func) == NULL) {
-                        perror("tsearch");
+                        fprintf(stderr, "query_map - tsearch failed\n");
                         return 1;
                     }
                 }

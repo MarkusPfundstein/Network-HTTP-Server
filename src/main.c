@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <libconfig.h>
+#include "module_map.h"
 #include "globals.h"
 #include "http_parser.h"
 #include "http_query.h"
@@ -65,7 +66,10 @@ typedef struct header_info_s {
     char *content_type;
     char *content_length;
     char *expect;
-    query_map_t *query_map_root;
+    /*
+     * root of query map
+     */
+    query_map_t *query_map;
     /* 
      * handler for content_type. for example json parser for application/json 
      * maybe i should pack this in a struct for itself
@@ -161,7 +165,7 @@ header_parse_url(http_parser *parser, const char *at, size_t n)
         query_len = n - question_mark_offset - 1;
         if (query_len > 0) {
             fprintf(stderr, "query_LENGTH: %d\n", query_len);
-            if (query_map_init(&header->query_map_root, query_start, query_len)) {
+            if (query_map_init(&header->query_map, query_start, query_len)) {
                 fprintf(stderr, "HTTP_PARSE_QUERY ERROR\n");
                 header->state = HEADER_INFO_STATE_ERROR;
                 return 1;
@@ -281,6 +285,15 @@ header_done(http_parser *parser)
         fprintf(stderr, "*** error while parsing header... abort\n");
         return 1;
     }
+    module_t *mod = module_map_find_name(g_config.module_root, "mod_html");
+    if (mod) {
+        fprintf(stderr, "FOUND by name %s\n", mod->name);
+    }
+    mod = module_map_find_ident(g_config.module_root, "html");
+    if (mod) {
+        fprintf(stderr, "FOUND by ident %s\n", mod->name);
+    }
+   
     /* here we can set our header->user data to the appropriate handler */
     if (header->content_length) {
         content_length = atoi(header->content_length);
@@ -324,9 +337,9 @@ header_message_done(http_parser *parser)
     }
 
     /* reference how to search query map */ 
-    query_map_t *res1 = query_map_find(header->query_map_root, "idx");
-    query_map_t *res2 = query_map_find(header->query_map_root, "name");
-    query_map_t *res3 = query_map_find(header->query_map_root, "address");
+    query_map_t *res1 = query_map_find(header->query_map, "idx");
+    query_map_t *res2 = query_map_find(header->query_map, "name");
+    query_map_t *res3 = query_map_find(header->query_map, "address");
 
     if (res1) {
         fprintf(stderr, "res1: %s - %s\n", res1->key, res1->value);
@@ -439,9 +452,9 @@ child_main(int fd)
         fprintf(stderr, "*** free header->expect\n");
         free(header.expect);
     }
-    if (header.query_map_root) {
+    if (header.query_map) {
         fprintf(stderr, "*** free header->query_map\n");
-        query_map_destroy(header.query_map_root);
+        query_map_destroy(header.query_map);
     }
     if (header.type_handler_free_cb) {
         fprintf(stderr, "*** call type_handler_free_cb\n");
@@ -462,6 +475,61 @@ handle_sigint(int sig)
     fprintf(stderr, "signal %d received\n", sig);
     g_go_on = 0;
     close(g_sockfd);
+}
+
+static int
+load_mods(config_t *config, config_setting_t *setting)
+{
+    int err;
+    unsigned int mod_count;
+    int i;
+    const char* mod_name;
+    const char* mod_so;
+    const char* mod_ident;
+    config_setting_t *mod_setting;
+    err = 0;
+
+    fprintf(stderr, "load mods from config\n");
+    setting = config_lookup(config, "mods");
+    if (setting != NULL) {
+        mod_count = config_setting_length(setting);
+        for (i = 0; i < mod_count; ++i) {
+            mod_setting = config_setting_get_elem(setting, i);
+            if (mod_setting) {
+                if (!config_setting_lookup_string(mod_setting,
+                                                  "name",
+                                                  &mod_name) ||
+                    !config_setting_lookup_string(mod_setting,
+                                                  "so",
+                                                  &mod_so)) {
+                    continue;
+                }
+                if (!config_setting_lookup_string(mod_setting,
+                                                  "ident",
+                                                  &mod_ident)) {
+                    mod_ident = NULL;
+                }
+                fprintf(stderr, "load module %s - %s - [%s]\n", 
+                        mod_name, mod_so, mod_ident);
+                module_t *mod = module_open(mod_name,
+                                            mod_ident,
+                                            mod_so,
+                                            RTLD_LAZY);
+                if (!mod) {
+                    err = 1;
+                    break;
+                }
+                if (module_map_insert(&g_config.module_root, mod) == NULL) {
+                    err = 1;
+                    module_close(mod);
+                    break;
+                }
+                /*module_close(mod);*/
+            }
+        }
+    }
+
+    return err;
 }
 
 static int
@@ -547,6 +615,8 @@ parse_config_file(const char *path)
     fprintf(stderr, "read_package_size: %d\n", g_config.read_package_size);
     fprintf(stderr, "backlog: %d\n", g_config.backlog);
 
+    err = load_mods(&config, setting);
+
 error:
     config_destroy(&config);
     return err;
@@ -557,12 +627,17 @@ main(int argc, char **argv)
 {
     int child_pid;
     int newfd;
+    int ret;
+    int child_return;
     socklen_t socklen;
     struct sockaddr_in serv_addr;
     struct sockaddr_in cli_addr;
 
+    g_sockfd = -1;
+
     if (parse_config_file("bone_http_serv.conf")) {
-        return 1;
+        ret = 1;
+        goto error;
     }
 
     signal(SIGCHLD, SIG_IGN);
@@ -571,27 +646,31 @@ main(int argc, char **argv)
     g_sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (g_sockfd < 0) {
         perror("socket");
-        return 1;
+        ret = 1;
+        goto error;
     }
     memset(&serv_addr, 0, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
     if (inet_aton(g_config.accept_ip_v4, &serv_addr.sin_addr) == 0) {
         perror("inet_aton");
-        return 1;
+        ret = 1;
+        goto error;
     }
     fprintf(stderr, "ip %s\n", inet_ntoa(serv_addr.sin_addr));
     serv_addr.sin_port = htons(g_config.listen_port);
     if (bind(g_sockfd, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
         perror("bind");
-        return 1;
+        ret = 1;
+        goto error;
     }
 
-    g_go_on = 1;
     if (listen(g_sockfd, g_config.backlog) < 0) {
         perror("listen");
-        g_go_on = 0;
+        ret = 1;
+        goto error;
     }
     socklen = sizeof(cli_addr);
+    g_go_on = 1;
     while (g_go_on) {
         newfd = accept(g_sockfd, (struct sockaddr *)&cli_addr, &socklen);
         if (newfd < 0) {
@@ -603,16 +682,23 @@ main(int argc, char **argv)
                 close(newfd);
             } else if (child_pid == 0) {
                 close(g_sockfd);
-                exit(child_main(newfd));
+                child_return = child_main(newfd);
+                module_map_destroy(g_config.module_root);
+                exit(child_return);
             } else {
                 close(newfd);
             }
         }
     }
+    ret = 0;
     
+error:
     fprintf(stderr, "shutdown\n");
 
-    close(g_sockfd);
+    module_map_destroy(g_config.module_root);
+    if (g_sockfd != -1) {
+        close(g_sockfd);
+    }
 
-    return 0;
+    return ret;
 }
